@@ -4,14 +4,26 @@ export async function createRun() {
   const res = await fetch(`${API}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scenario: "outreach_almost_sends_email" }),
+    body: JSON.stringify({ scenario: "outreach_almost_sends_email", enqueue: true }),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function watchRun(runId) {
+  const res = await fetch(`${API}/runs/${runId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getRun(runId) {
   const res = await fetch(`${API}/runs/${runId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getEvents(runId) {
+  const res = await fetch(`${API}/runs/${runId}/events`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

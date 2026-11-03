@@ -1,4 +1,4 @@
-.PHONY: demo up down build logs restart
+.PHONY: demo up down build logs restart test
 
 demo: up
 
@@ -17,3 +17,6 @@ logs:
 restart:
 	docker compose down
 	docker compose up --build
+
+test:
+	cd api && REDIS_URL=redis://localhost:6379/15 python3 -m pytest tests/ -v

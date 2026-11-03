@@ -26,6 +26,10 @@ app.add_middleware(
 
 class CreateRunBody(BaseModel):
     scenario: str = Field(default=runs.SCENARIO_OUTREACH)
+    enqueue: bool = Field(
+        default=True,
+        description="If false, do not push to the worker queue (external drivers)",
+    )
 
 
 class AgentEventBody(BaseModel):
@@ -51,7 +55,7 @@ def health() -> dict[str, Any]:
 
 @app.post("/runs")
 def create_run(body: CreateRunBody) -> dict[str, Any]:
-    return runs.create_run(scenario=body.scenario)
+    return runs.create_run(scenario=body.scenario, enqueue=body.enqueue)
 
 
 @app.get("/runs/{run_id}")

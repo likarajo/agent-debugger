@@ -101,6 +101,10 @@ def main() -> None:
                 scenario = run.get("scenario", "outreach_almost_sends_email")
                 if scenario == "outreach_almost_sends_email":
                     run_outreach(client, run_id)
+                elif scenario.startswith("external") or scenario.startswith("ai_agent_stack"):
+                    # Outside driver owns the timeline — do not abort or race it.
+                    print(f"[agent] skipping externally-driven scenario {scenario}", flush=True)
+                    continue
                 else:
                     post_event(
                         client,

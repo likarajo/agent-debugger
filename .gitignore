@@ -9,3 +9,6 @@ __pycache__/
 .idea/
 .vscode/
 docs/
+dump.rdb
+.pytest_cache/
+*.rdb

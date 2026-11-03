@@ -59,18 +59,74 @@ h1 {
   font-size: 15px;
 }
 
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  text-align: right;
+}
+
+.watch-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.watch-input {
+  min-width: 240px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.watch-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-color: var(--accent);
+}
+
+.run-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.run-id {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .btn {
-  border: 0;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px 18px;
   font-size: 15px;
   font-weight: 650;
   cursor: pointer;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-primary {
   background: var(--accent);
   color: white;
+  border: 0;
 }
 
 .btn-primary:disabled {
@@ -83,6 +139,7 @@ h1 {
   color: #062214;
   font-size: 18px;
   padding: 14px 22px;
+  border: 0;
 }
 
 .btn-deny {
@@ -90,6 +147,7 @@ h1 {
   color: white;
   font-size: 18px;
   padding: 14px 22px;
+  border: 0;
 }
 
 .paused-banner {
@@ -188,13 +246,66 @@ h1 {
 .event .type {
   font-weight: 700;
   color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .event.gated .type { color: var(--paused); }
 
+.kind-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #1c3358;
+  color: #9ec1ff;
+}
+
+.kind-plugin .kind-badge { background: #243018; color: #b7e08a; }
+.kind-skill .kind-badge { background: #2a2140; color: #cbb6ff; }
+.kind-rag-retrieve .kind-badge { background: #18342f; color: #7ddec4; }
+.kind-mcp-call .kind-badge { background: #3a2a12; color: #ffd18a; }
+.kind-api-call .kind-badge { background: #122a3a; color: #7ec8ff; }
+.kind-llm-call .kind-badge { background: #3a1830; color: #ff9fd0; }
+.kind-tool-call .kind-badge { background: #1c3358; color: #9ec1ff; }
+.kind-answer .kind-badge,
+.kind-user .kind-badge { background: #143528; color: #8dffc0; }
+
+.meta-right {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.duration {
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
 .event .msg {
   font-size: 15px;
   line-height: 1.35;
+}
+
+.io {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.io-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
 }
 
 .payload {
@@ -211,6 +322,8 @@ h1 {
   overflow: auto;
 }
 
+.io .payload { margin-top: 0; }
+
 .breakpoint {
   border: 2px solid var(--paused);
   background: #24140f;
@@ -226,10 +339,16 @@ h1 {
   text-transform: uppercase;
 }
 
-.status-queued, .status-running { background: #1c3358; color: #9ec1ff; }
+.status-queued, .status-created, .status-running { background: #1c3358; color: #9ec1ff; }
 .status-paused { background: #5a2216; color: #ffb39e; }
 .status-completed { background: #143528; color: #8dffc0; }
 .status-aborted { background: #4a1824; color: #ff9db3; }
+
+.footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.footer a:hover { text-decoration: underline; }
 
 .empty {
   color: var(--muted);
