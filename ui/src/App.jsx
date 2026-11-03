@@ -1,26 +1,131 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createRun, getAudit, getRun, submitDecision, subscribe } from "./api.js";
+import {
+  createRun,
+  getAudit,
+  getEvents,
+  getRun,
+  submitDecision,
+  subscribe,
+  watchRun,
+} from "./api.js";
 
 function formatTime(ts) {
   if (!ts) return "";
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
+/** Map event type / tool name to a short observability step label. */
+function stepKind(event) {
+  const type = event.type || "";
+  const tool = event.tool || "";
+
+  if (type === "user.message") return "user";
+  if (type === "agent.answer" || type === "answer") return "answer";
+  if (type === "think") return "think";
+  if (type === "decision") return "decision";
+  if (type.startsWith("run.")) return type;
+
+  const name = tool || type;
+  if (name.startsWith("plugin") || type === "plugin") return "plugin";
+  if (name.startsWith("skill") || type === "skill") return "skill";
+  if (name.startsWith("rag") || type === "rag.retrieve") return "rag.retrieve";
+  if (name.startsWith("mcp") || type === "mcp.call") return "mcp.call";
+  if (name.startsWith("api") || type === "api.call") return "api.call";
+  if (name.startsWith("llm") || type === "llm.call" || type === "llm.chat") return "llm.call";
+  if (type === "tool.call" || type === "tool.result") return "tool.call";
+  return type;
+}
+
+function durationMs(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const value = payload.duration_ms;
+  return typeof value === "number" ? value : null;
+}
+
+function extractIO(payload) {
+  if (!payload || typeof payload !== "object") return { input: null, output: null };
+  const input =
+    "input" in payload
+      ? payload.input
+      : payload.query != null
+        ? { query: payload.query, k: payload.k }
+        : null;
+  const output =
+    "output" in payload
+      ? payload.output
+      : "content" in payload
+        ? payload.content
+        : null;
+  return { input, output };
+}
+
 function EventCard({ event }) {
   const gated = Boolean(event.gated) || event.tool === "email.send";
+  const kind = stepKind(event);
+  const ms = durationMs(event.payload);
+  const { input, output } = extractIO(event.payload);
+  const showStructured =
+    event.payload != null &&
+    typeof event.payload === "object" &&
+    (input != null || output != null || ms != null);
+
   return (
-    <div className={`event ${gated && event.type === "tool.call" ? "gated" : ""}`}>
+    <div className={`event ${gated && event.type === "tool.call" ? "gated" : ""} kind-${kind.replace(".", "-")}`}>
       <div className="meta">
-        <span className="type">{event.type}{event.tool ? ` · ${event.tool}` : ""}</span>
-        <span>{formatTime(event.ts)}</span>
+        <span className="type">
+          <span className="kind-badge">{kind}</span>
+          {event.type}
+          {event.tool ? ` · ${event.tool}` : ""}
+        </span>
+        <span className="meta-right">
+          {ms != null && <span className="duration">{ms} ms</span>}
+          <span>{formatTime(event.ts)}</span>
+        </span>
       </div>
       <div className="msg">{event.message || "—"}</div>
-      {event.payload != null && (
-        <pre className="payload">{JSON.stringify(event.payload, null, 2)}</pre>
+      {showStructured ? (
+        <div className="io">
+          {input != null && (
+            <div className="io-block">
+              <div className="io-label">input</div>
+              <pre className="payload">{JSON.stringify(input, null, 2)}</pre>
+            </div>
+          )}
+          {output != null && (
+            <div className="io-block">
+              <div className="io-label">output</div>
+              <pre className="payload">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>
+            </div>
+          )}
+          {input == null && output == null && (
+            <pre className="payload">{JSON.stringify(event.payload, null, 2)}</pre>
+          )}
+        </div>
+      ) : (
+        event.payload != null && (
+          <pre className="payload">{JSON.stringify(event.payload, null, 2)}</pre>
+        )
       )}
     </div>
   );
 }
+
+const AUDIT_REFRESH_TYPES = new Set([
+  "decision",
+  "run.completed",
+  "run.aborted",
+  "tool.result",
+  "user.message",
+  "agent.answer",
+  "answer",
+  "llm.chat",
+  "llm.call",
+  "plugin",
+  "skill",
+  "rag.retrieve",
+  "mcp.call",
+  "api.call",
+]);
 
 export default function App() {
   const [run, setRun] = useState(null);
@@ -28,7 +133,9 @@ export default function App() {
   const [audit, setAudit] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [watchId, setWatchId] = useState("");
   const unsubRef = useRef(null);
+  const autoWatchDone = useRef(false);
 
   const paused = run?.status === "paused";
   const pausedEvent = useMemo(
@@ -54,6 +161,27 @@ export default function App() {
     }
   }
 
+  function attachStream(runId) {
+    if (unsubRef.current) unsubRef.current();
+    unsubRef.current = subscribe(runId, async (event) => {
+      setEvents((prev) => {
+        if (prev.some((p) => p.id === event.id)) return prev;
+        return [...prev, event];
+      });
+      if (AUDIT_REFRESH_TYPES.has(event.type)) {
+        refreshAudit(runId);
+      }
+      if (["run.completed", "run.aborted", "tool.call", "decision", "run.started"].includes(event.type)) {
+        try {
+          const latest = await getRun(runId);
+          setRun(latest);
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+  }
+
   async function startDemo() {
     setError("");
     setBusy(true);
@@ -63,30 +191,47 @@ export default function App() {
       setAudit([]);
       const created = await createRun();
       setRun(created);
-
-      unsubRef.current = subscribe(created.id, async (event) => {
-        setEvents((prev) => {
-          if (prev.some((p) => p.id === event.id)) return prev;
-          return [...prev, event];
-        });
-        if (["decision", "run.completed", "run.aborted", "tool.result"].includes(event.type)) {
-          refreshAudit(created.id);
-        }
-        if (["run.completed", "run.aborted", "tool.call", "decision"].includes(event.type)) {
-          try {
-            const latest = await getRun(created.id);
-            setRun(latest);
-          } catch {
-            /* ignore */
-          }
-        }
-      });
+      attachStream(created.id);
     } catch (e) {
       setError(String(e.message || e));
     } finally {
       setBusy(false);
     }
   }
+
+  async function watchExisting(idOverride) {
+    const id = (idOverride ?? watchId).trim();
+    if (!id) return;
+    setError("");
+    setBusy(true);
+    try {
+      if (unsubRef.current) unsubRef.current();
+      setEvents([]);
+      setAudit([]);
+      const existing = await watchRun(id);
+      setRun(existing);
+      setWatchId(id);
+      const prior = await getEvents(existing.id);
+      setEvents(prior.events || []);
+      await refreshAudit(existing.id);
+      attachStream(existing.id);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Deep link: /?run_id=<uuid> auto-attaches to an external run.
+  useEffect(() => {
+    if (autoWatchDone.current) return;
+    const id = new URLSearchParams(window.location.search).get("run_id");
+    if (id) {
+      autoWatchDone.current = true;
+      setWatchId(id);
+      watchExisting(id);
+    }
+  }, []);
 
   async function decide(decision) {
     if (!run) return;
@@ -111,16 +256,36 @@ export default function App() {
           <p className="brand">Agent Debugger</p>
           <h1>Live breakpoint console</h1>
           <p className="sub">
-            Scripted outreach agent · gates <code>email.send</code> until you approve or deny
+            Scripted outreach agent · gates <code>email.send</code> until you approve or deny — or
+            watch an external <code>ai-agent-stack</code> run
           </p>
         </div>
-        <div style={{ textAlign: "right" }}>
+        <div className="header-actions">
           <button className="btn btn-primary" onClick={startDemo} disabled={busy}>
             {busy && !run ? "Starting…" : "Run demo: Outreach Agent"}
           </button>
+          <div className="watch-row">
+            <input
+              className="watch-input"
+              value={watchId}
+              onChange={(e) => setWatchId(e.target.value)}
+              placeholder="Paste external run id"
+              aria-label="External run id"
+            />
+            <button
+              className="btn"
+              onClick={() => watchExisting()}
+              disabled={busy || !watchId.trim()}
+            >
+              Watch run
+            </button>
+          </div>
           {run && (
-            <div style={{ marginTop: 10 }}>
+            <div className="run-meta">
               <span className={`status-pill status-${run.status}`}>{run.status}</span>
+              <code className="run-id" title={run.id}>
+                {run.id}
+              </code>
             </div>
           )}
         </div>
@@ -151,7 +316,9 @@ export default function App() {
           <h3>Timeline</h3>
           <div className="timeline">
             {events.length === 0 && (
-              <div className="empty">Start the demo to stream tool calls here.</div>
+              <div className="empty">
+                Start the outreach demo, or paste a run id and click Watch run.
+              </div>
             )}
             {events.map((e) => (
               <EventCard key={e.id} event={e} />
@@ -178,7 +345,9 @@ export default function App() {
           <section className="panel">
             <h3>Audit log</h3>
             <div className="timeline">
-              {audit.length === 0 && <div className="empty">Decisions and outcomes appear here.</div>}
+              {audit.length === 0 && (
+                <div className="empty">Decisions, tool results, answers, and outcomes appear here.</div>
+              )}
               {audit.map((e) => (
                 <EventCard key={e.id} event={e} />
               ))}
@@ -188,7 +357,10 @@ export default function App() {
       </div>
 
       <p className="footer">
-        Local Docker demo · API {run ? run.id.slice(0, 8) : "—"} · no real email is ever sent
+        Local Docker demo · API {run ? run.id.slice(0, 8) : "—"} · no real email is ever sent ·{" "}
+        <a href="https://github.com/likarajo/ai-agent-stack" target="_blank" rel="noreferrer">
+          Use with a real agent
+        </a>
       </p>
     </div>
   );

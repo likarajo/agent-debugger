@@ -11,6 +11,31 @@ from app.redis_client import get_redis
 RUNS_QUEUE = "runs:queue"
 SCENARIO_OUTREACH = "outreach_almost_sends_email"
 
+# Timeline / audit types emitted by external drivers (e.g. ai-agent-stack).
+AUDIT_TYPES = frozenset(
+    {
+        "decision",
+        "tool.result",
+        "run.completed",
+        "run.aborted",
+        "user.message",
+        "agent.answer",
+        "llm.chat",
+        "llm.call",
+        "plugin",
+        "skill",
+        "rag.retrieve",
+        "mcp.call",
+        "api.call",
+        "answer",
+    }
+)
+
+
+def is_external_scenario(scenario: str) -> bool:
+    """Scenarios owned by an outside driver — never run by the scripted worker."""
+    return scenario.startswith("external") or scenario.startswith("ai_agent_stack")
+
 
 def _run_key(run_id: str) -> str:
     return f"run:{run_id}"
@@ -28,30 +53,40 @@ def _stream_channel(run_id: str) -> str:
     return f"run:{run_id}:stream"
 
 
-def create_run(scenario: str = SCENARIO_OUTREACH) -> dict[str, Any]:
+def create_run(scenario: str = SCENARIO_OUTREACH, enqueue: bool = True) -> dict[str, Any]:
     r = get_redis()
     run_id = str(uuid.uuid4())
     now = time.time()
+    # External drivers own the run; never hand them to the scripted outreach worker.
+    should_enqueue = bool(enqueue) and not is_external_scenario(scenario)
     run = {
         "id": run_id,
         "scenario": scenario,
-        "status": "queued",
+        "status": "queued" if should_enqueue else "created",
         "created_at": now,
         "updated_at": now,
         "paused_tool": None,
         "paused_payload": None,
+        "enqueue": should_enqueue,
     }
     r.set(_run_key(run_id), json.dumps(run))
     r.delete(_events_key(run_id))
     r.delete(_decision_key(run_id))
-    r.lpush(RUNS_QUEUE, run_id)
+    if should_enqueue:
+        r.lpush(RUNS_QUEUE, run_id)
+        # Keep the outreach demo event text/payload identical for filming.
+        created_msg = f"Run queued for scenario '{scenario}'"
+        created_payload = None
+    else:
+        created_msg = f"Run created for external scenario '{scenario}' (not enqueued)"
+        created_payload = {"enqueue": False, "scenario": scenario}
     _append_event(
         run_id,
         {
             "type": "run.created",
-            "message": f"Run queued for scenario '{scenario}'",
+            "message": created_msg,
             "tool": None,
-            "payload": None,
+            "payload": created_payload,
         },
     )
     return run
@@ -70,7 +105,7 @@ def list_events(run_id: str) -> list[dict[str, Any]]:
 
 
 def list_audit(run_id: str) -> list[dict[str, Any]]:
-    return [e for e in list_events(run_id) if e.get("type") in {"decision", "tool.result", "run.completed", "run.aborted"}]
+    return [e for e in list_events(run_id) if e.get("type") in AUDIT_TYPES]
 
 
 def _save_run(run: dict[str, Any]) -> None:
