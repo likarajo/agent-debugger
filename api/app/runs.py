@@ -31,6 +31,45 @@ AUDIT_TYPES = frozenset(
     }
 )
 
+# Canonical decision values stored in payloads / wait-decision responses.
+DECISION_APPROVE = "approve"
+DECISION_DENY = "deny"
+
+# Accept past-tense and the historical "denyd" typo on input so old clients/data keep working.
+_DECISION_ALIASES = {
+    "approve": DECISION_APPROVE,
+    "approved": DECISION_APPROVE,
+    "deny": DECISION_DENY,
+    "denied": DECISION_DENY,
+    "denyd": DECISION_DENY,  # legacy typo — still accepted on input
+}
+
+_DECISION_PAST_TENSE = {
+    DECISION_APPROVE: "approved",
+    DECISION_DENY: "denied",
+}
+
+
+def normalize_decision(decision: str) -> str:
+    """Map approve/approved and deny/denied/denyd → canonical approve|deny."""
+    key = (decision or "").strip().lower()
+    if key not in _DECISION_ALIASES:
+        raise ValueError("decision must be approve or deny")
+    return _DECISION_ALIASES[key]
+
+
+def decision_past_tense(decision: str) -> str:
+    """Human-readable past tense for audit/timeline messages (never 'denyd')."""
+    return _DECISION_PAST_TENSE[normalize_decision(decision)]
+
+
+def _rewrite_legacy_denyd_message(event: dict[str, Any]) -> dict[str, Any]:
+    """Normalize historical 'Human denyd …' audit strings when reading events."""
+    msg = event.get("message")
+    if isinstance(msg, str) and "Human denyd " in msg:
+        return {**event, "message": msg.replace("Human denyd ", "Human denied ", 1)}
+    return event
+
 
 def is_external_scenario(scenario: str) -> bool:
     """Scenarios owned by an outside driver — never run by the scripted worker."""
@@ -101,7 +140,7 @@ def get_run(run_id: str) -> dict[str, Any] | None:
 
 def list_events(run_id: str) -> list[dict[str, Any]]:
     raw_list = get_redis().lrange(_events_key(run_id), 0, -1)
-    return [json.loads(x) for x in raw_list]
+    return [_rewrite_legacy_denyd_message(json.loads(x)) for x in raw_list]
 
 
 def list_audit(run_id: str) -> list[dict[str, Any]]:
@@ -166,8 +205,7 @@ def append_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
 
 
 def submit_decision(run_id: str, decision: str, note: str | None = None) -> dict[str, Any]:
-    if decision not in {"approve", "deny"}:
-        raise ValueError("decision must be approve or deny")
+    decision = normalize_decision(decision)
     run = get_run(run_id)
     if not run:
         raise ValueError("run not found")
@@ -189,13 +227,13 @@ def submit_decision(run_id: str, decision: str, note: str | None = None) -> dict
         run_id,
         {
             "type": "decision",
-            "message": f"Human {decision}d {run.get('paused_tool')}",
+            "message": f"Human {decision_past_tense(decision)} {run.get('paused_tool')}",
             "tool": run.get("paused_tool"),
             "payload": payload,
         },
     )
 
-    if decision == "deny":
+    if decision == DECISION_DENY:
         run["status"] = "aborted"
         run["paused_tool"] = None
         run["paused_payload"] = None

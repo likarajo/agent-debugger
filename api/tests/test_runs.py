@@ -236,3 +236,104 @@ def test_is_external_scenario_helper():
     assert runs.is_external_scenario("ai_agent_stack_issue_triage")
     assert runs.is_external_scenario("external_demo")
     assert not runs.is_external_scenario("outreach_almost_sends_email")
+
+
+def _pause_on_email_send(client, *, scenario: str, enqueue: bool = False) -> str:
+    created = client.post("/runs", json={"scenario": scenario, "enqueue": enqueue}).json()
+    run_id = created["id"]
+    assert client.post(f"/runs/{run_id}/events", json={"type": "run.started", "message": "go"}).status_code == 200
+    gated = client.post(
+        f"/runs/{run_id}/events",
+        json={
+            "type": "tool.call",
+            "tool": "email.send",
+            "message": "Sending notify",
+            "payload": {"to": "ops@example.com"},
+        },
+    )
+    assert gated.status_code == 200
+    assert gated.json().get("gated") is True
+    assert client.get(f"/runs/{run_id}").json()["status"] == "paused"
+    return run_id
+
+
+def test_normalize_decision_accepts_legacy_denyd_and_denied():
+    assert runs.normalize_decision("deny") == "deny"
+    assert runs.normalize_decision("denied") == "deny"
+    assert runs.normalize_decision("denyd") == "deny"
+    assert runs.normalize_decision("Approve") == "approve"
+    assert runs.normalize_decision("approved") == "approve"
+    assert runs.decision_past_tense("deny") == "denied"
+    assert runs.decision_past_tense("denyd") == "denied"
+    assert runs.decision_past_tense("approve") == "approved"
+    try:
+        runs.normalize_decision("maybe")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "approve or deny" in str(exc)
+
+
+def test_deny_audit_message_says_denied_not_denyd(client):
+    run_id = _pause_on_email_send(client, scenario="outreach_almost_sends_email", enqueue=False)
+    resp = client.post(f"/runs/{run_id}/decision", json={"decision": "deny"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "decision"
+    assert body["message"] == "Human denied email.send"
+    assert "denyd" not in body["message"]
+    assert body["payload"]["decision"] == "deny"
+
+    audit = client.get(f"/runs/{run_id}/audit").json()["audit"]
+    decision_msgs = [e["message"] for e in audit if e["type"] == "decision"]
+    assert decision_msgs == ["Human denied email.send"]
+
+
+def test_decision_endpoint_accepts_denied_and_legacy_denyd(client):
+    run_id = _pause_on_email_send(client, scenario="external_alias_denied", enqueue=False)
+    resp = client.post(f"/runs/{run_id}/decision", json={"decision": "denied"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["payload"]["decision"] == "deny"
+    assert resp.json()["message"] == "Human denied email.send"
+    assert client.get(f"/runs/{run_id}").json()["status"] == "aborted"
+
+    run_id2 = _pause_on_email_send(client, scenario="external_alias_denyd", enqueue=False)
+    resp2 = client.post(f"/runs/{run_id2}/decision", json={"decision": "denyd"})
+    assert resp2.status_code == 200, resp2.text
+    assert resp2.json()["payload"]["decision"] == "deny"
+    assert resp2.json()["message"] == "Human denied email.send"
+
+
+def test_external_run_deny_returns_200(client):
+    """Valid deny on a paused external (ai_agent_stack) run must not be HTTP 400."""
+    run_id = _pause_on_email_send(client, scenario="ai_agent_stack_issue_triage", enqueue=False)
+    resp = client.post(f"/runs/{run_id}/decision", json={"decision": "deny"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["message"] == "Human denied email.send"
+    assert client.get(f"/runs/{run_id}").json()["status"] == "aborted"
+
+    audit = client.get(f"/runs/{run_id}/audit").json()["audit"]
+    types = [e["type"] for e in audit]
+    assert "decision" in types
+    assert "run.aborted" in types
+
+
+def test_list_events_rewrites_legacy_denyd_audit_message(client):
+    run_id = _pause_on_email_send(client, scenario="external_legacy_msg", enqueue=False)
+    # Simulate a pre-fix event still stored with the typo.
+    legacy = {
+        "type": "decision",
+        "message": "Human denyd email.send",
+        "tool": "email.send",
+        "payload": {"decision": "deny", "tool": "email.send"},
+        "id": "legacy-1",
+        "run_id": run_id,
+        "ts": 1.0,
+    }
+    get_redis().rpush(f"run:{run_id}:events", __import__("json").dumps(legacy))
+
+    events = client.get(f"/runs/{run_id}/events").json()["events"]
+    rewritten = [e for e in events if e.get("id") == "legacy-1"][0]
+    assert rewritten["message"] == "Human denied email.send"
+
+    audit = client.get(f"/runs/{run_id}/audit").json()["audit"]
+    assert any(e.get("id") == "legacy-1" and e["message"] == "Human denied email.send" for e in audit)
