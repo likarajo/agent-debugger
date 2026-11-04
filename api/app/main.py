@@ -40,7 +40,9 @@ class AgentEventBody(BaseModel):
 
 
 class DecisionBody(BaseModel):
-    decision: str
+    decision: str = Field(
+        description="approve|deny (also accepts approved|denied|denyd; stored as approve|deny)",
+    )
     note: str | None = None
 
 
