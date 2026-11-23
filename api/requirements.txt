@@ -1,5 +1,10 @@
-fastapi==0.115.6
+fastapi==0.165.0
+starlette==1.10.0
 uvicorn[standard]==0.34.0
 redis==5.2.1
 pydantic==2.10.4
 httpx==0.28.1
+# Pinned transitive deps (security fixes)
+anyio==4.16.0
+certifi==2026.11.20
+idna==3.20
